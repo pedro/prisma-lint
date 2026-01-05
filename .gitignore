@@ -6,7 +6,6 @@ node_modules
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
-dist
 .idea
 **/.DS_Store
 tsconfig.tsbuildinfo

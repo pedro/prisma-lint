@@ -1,0 +1,79 @@
+import { getPrismaSchema } from '#src/common/get-prisma-schema.js';
+import { isModelEntirelyIgnored, isRuleEntirelyIgnored, listIgnoreModelComments, listIgnoreEnumComments, isEnumEntirelyIgnored, isFieldIgnored, } from '#src/common/ignore.js';
+import { listModelBlocks, listFields, listEnumBlocks, listCustomTypeBlocks, } from '#src/common/prisma.js';
+export function lintPrismaSourceCode({ rules, fileName, sourceCode, }) {
+    // Parse source code into AST.
+    const prismaSchema = getPrismaSchema(sourceCode);
+    // Mutable list of violations added to by rule instances.
+    const violations = [];
+    const enums = listEnumBlocks(prismaSchema);
+    const enumNames = new Set(enums.map((e) => e.name));
+    const customTypes = listCustomTypeBlocks(prismaSchema);
+    const customTypeNames = new Set(customTypes.map((e) => e.name));
+    // Create rule instances.
+    const namedRuleInstances = rules.map(({ ruleDefinition, ruleConfig }) => {
+        const { ruleName } = ruleDefinition;
+        const report = (nodeViolation) => {
+            let node;
+            if ('field' in nodeViolation) {
+                node = nodeViolation.field;
+            }
+            else if ('model' in nodeViolation) {
+                node = nodeViolation.model;
+            }
+            else {
+                node = nodeViolation.enum;
+            }
+            if (node?.location?.startLine) {
+                if (isFieldIgnored(sourceCode, node.location.startLine, ruleName)) {
+                    return;
+                }
+            }
+            violations.push({ ruleName, fileName, ...nodeViolation });
+        };
+        const context = {
+            customTypeNames,
+            enumNames,
+            fileName,
+            report,
+            sourceCode,
+        };
+        const ruleInstance = ruleDefinition.create(ruleConfig, context);
+        return { ruleName, ruleInstance };
+    });
+    // Run each rule instance for each AST node.
+    const models = listModelBlocks(prismaSchema);
+    models.forEach((model) => {
+        const comments = listIgnoreModelComments(model);
+        if (isModelEntirelyIgnored(comments)) {
+            return;
+        }
+        const fields = listFields(model);
+        namedRuleInstances
+            .filter(({ ruleName }) => !isRuleEntirelyIgnored(ruleName, comments))
+            .forEach(({ ruleInstance }) => {
+            if ('Model' in ruleInstance) {
+                ruleInstance.Model(model);
+            }
+            if ('Field' in ruleInstance) {
+                fields.forEach((field) => {
+                    ruleInstance.Field(model, field);
+                });
+            }
+        });
+    });
+    enums.forEach((enumObj) => {
+        const comments = listIgnoreEnumComments(enumObj);
+        if (isEnumEntirelyIgnored(comments)) {
+            return;
+        }
+        namedRuleInstances
+            .filter(({ ruleName }) => !isRuleEntirelyIgnored(ruleName, comments))
+            .forEach(({ ruleInstance }) => {
+            if ('Enum' in ruleInstance) {
+                ruleInstance.Enum(enumObj);
+            }
+        });
+    });
+    return violations;
+}
